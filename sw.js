@@ -1,5 +1,5 @@
 // Ridekort offline cache: app shell + every map tile you have seen.
-const SHELL = "rk-shell-v1", TILES = "rk-tiles-v1", MAX_TILES = 4000;
+const SHELL = "rk-shell-v2", TILES = "rk-tiles-v1", MAX_TILES = 4000;
 const SHELL_FILES = ["./", "index.html", "manifest.json",
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"];

@@ -88,7 +88,7 @@ const store={
 };
 
 /* ---------- map ---------- */
-const map=L.map("map",{zoomControl:false,attributionControl:true}).setView([55.93,12.35],13);
+const map=L.map("map",{zoomControl:false,attributionControl:true,preferCanvas:true}).setView([55.93,12.35],13);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,
   attribution:"© OpenStreetMap-bidragydere"}).addTo(map);
 
@@ -109,7 +109,9 @@ const markLayer=L.layerGroup().addTo(map);
 /* ---------- OSM data (Overpass) ---------- */
 const OVERPASS="https://overpass-api.de/api/interpreter";
 let graph={nodes:new Map(),ways:new Map(),adj:new Map()};
-let loadedBoxes=store.get("rk_boxes",[]);   // cached areas
+// v2 cache: drop old areas that still contained roads
+try{for(const c of store.get("rk_boxes",[]))localStorage.removeItem(c.key);localStorage.removeItem("rk_boxes")}catch(e){}
+let loadedBoxes=store.get("rk2_boxes",[]);   // cached areas
 let loading=false;
 
 function classify(t){
@@ -140,13 +142,19 @@ async function loadArea(force){
   if(loading||map.getZoom()<12)return;
   const B=map.getBounds().pad(0.6);
   const b=[B.getSouth(),B.getWest(),B.getNorth(),B.getEast()].map(v=>+v.toFixed(3));
-  const key="rk_area_"+boxKey(b);
+  const key="rk2_area_"+boxKey(b);
   const cached=!force&&findCachedArea(b);
   if(cached){ingest(cached);return}
   loading=true;status("Henter stier…");
   const bb=b.join(",");
-  const q=`[out:json][timeout:40];(
-    way["highway"~"^(path|track|bridleway|footway|cycleway|steps|unclassified|service|residential|tertiary|secondary)$"](${bb});
+  // Only nature: tracks, bridleways and small paths anywhere; foot/cycle paths only inside forest, heath and fields. No real roads, no sidewalks.
+  const q=`[out:json][timeout:40];
+  (way["landuse"~"^(forest|meadow|grass|farmland)$"](${bb});way["natural"~"^(wood|heath|grassland|scrub)$"](${bb});
+   rel["landuse"="forest"](${bb});rel["natural"="wood"](${bb});)->.green;
+  .green map_to_area->.ga;
+  (
+    way["highway"~"^(track|bridleway|path)$"]["footway"!~"sidewalk|crossing"](${bb});
+    way["highway"~"^(footway|cycleway)$"]["footway"!~"sidewalk|crossing"](area.ga);
     node["historic"](${bb});way["historic"](${bb});
     node["natural"="tree"]["name"](${bb});node["natural"="tree"]["denotation"="natural_monument"](${bb});
     node["natural"~"^(stone|spring)$"](${bb});node["tourism"="viewpoint"](${bb});node["amenity"="shelter"](${bb});
@@ -180,7 +188,7 @@ function saveArea(key,b,slim){
   loadedBoxes=loadedBoxes.filter(x=>x.key!==key);
   loadedBoxes.push({key,b});
   while(loadedBoxes.length>12){const old=loadedBoxes.shift();try{localStorage.removeItem(old.key)}catch(e){}}
-  store.set(key,slim);store.set("rk_boxes",loadedBoxes);
+  store.set(key,slim);store.set("rk2_boxes",loadedBoxes);
 }
 function findCachedArea(b){
   for(const c of loadedBoxes){const x=c.b;if(x[0]<=b[0]&&x[1]<=b[1]&&x[2]>=b[2]&&x[3]>=b[3]){const s=store.get(c.key,null);if(s)return s}}
@@ -192,6 +200,7 @@ function ingest(s){
   for(const w of s.w){
     if(graph.ways.has(w.id))continue;
     w.cls=classify(w.t);graph.ways.set(w.id,w);
+    {let a=90,b=180,c=-90,d=-180;for(const x of w.n){const p=graph.nodes.get(x);if(!p)continue;a=Math.min(a,p[0]);b=Math.min(b,p[1]);c=Math.max(c,p[0]);d=Math.max(d,p[1])}w.bb=[a,b,c,d]}
     for(let i=0;i<w.n.length;i++){
       const a=w.n[i];if(!graph.adj.has(a))graph.adj.set(a,[]);
       graph.adj.get(a).push({way:w.id,idx:i});
@@ -282,7 +291,9 @@ map.on("dragstart",()=>{follow=false});
 /* nearest way segment */
 function nearestWay(ll){
   let best=null;
+  const m=0.006; // about 600 m: skip ways that are clearly far away
   for(const w of graph.ways.values()){
+    if(w.bb&&(ll[0]<w.bb[0]-m||ll[0]>w.bb[2]+m||ll[1]<w.bb[1]-m*1.8||ll[1]>w.bb[3]+m*1.8))continue;
     for(let i=0;i<w.n.length-1;i++){
       const a=graph.nodes.get(w.n[i]),b=graph.nodes.get(w.n[i+1]);if(!a||!b)continue;
       const d=segDist(ll,a,b);
