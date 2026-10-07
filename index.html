@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ridekort">
+<meta name="theme-color" content="#1f2a22">
+<link rel="manifest" href="manifest.json">
+<title>Ridekort</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Ride mode: full-bleed map, three big thumb buttons at the bottom, one status line on top. */
+:root{
+  --bg:#f3f1ea; --fg:#1d241f; --panel:#ffffffee; --muted:#5d6a60;
+  --forest:#2f5d3a; --bridle:#c2531b; --track:#7a5a2b; --path:#3a3a3a; --mtb:#2b6fb5;
+  --gallop:#d6261e; --trot:#e9a21b; --walk:#4b8b3b; --accent:#c2531b;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root{--bg:#141a16;--fg:#eef1ec;--panel:#1d241fee;--muted:#a3aea5;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+#map{position:fixed;inset:0;background:#dfe5d8}
+.leaflet-control-attribution{font-size:9px}
+#status{position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 10px);z-index:1000;
+  background:var(--panel);border-radius:14px;padding:10px 14px;font-size:17px;line-height:1.3;
+  box-shadow:0 2px 10px #0003;display:flex;gap:10px;align-items:center}
+#status .dot{width:12px;height:12px;border-radius:50%;background:var(--muted);flex:none}
+#status.rec .dot{background:var(--gallop);animation:pulse 1.4s infinite}
+#statusText{flex:1;min-width:0}
+#speed{font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}
+@keyframes pulse{50%{opacity:.3}}
+#bar{position:fixed;left:0;right:0;bottom:0;z-index:1000;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;
+  padding:10px 12px calc(env(safe-area-inset-bottom,0px) + 12px)}
+#bar button{border:0;border-radius:18px;min-height:84px;font:700 17px/1.15 var(--font);color:#fff;
+  box-shadow:0 3px 12px #0004;padding:8px 6px}
+#bar button:active{transform:scale(.96)}
+#bWhere{background:var(--forest)}
+#bLead{background:var(--accent)}
+#bMark{background:#2a2f2b}
+#bar button small{display:block;font-weight:500;font-size:12px;opacity:.85;margin-top:4px}
+#side{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 74px);z-index:1000;display:flex;flex-direction:column;gap:10px}
+#side button{width:52px;height:52px;border-radius:14px;border:0;background:var(--panel);color:var(--fg);font:700 20px var(--font);box-shadow:0 2px 8px #0003}
+#side button.on{background:var(--gallop);color:#fff}
+#sheet{position:fixed;inset:auto 0 0 0;z-index:2000;background:var(--bg);max-height:80%;overflow:auto;border-radius:20px 20px 0 0;
+  padding:18px 16px calc(env(safe-area-inset-bottom,0px) + 20px);box-shadow:0 -4px 20px #0005}
+#sheet h2{margin:0 0 10px;font-size:20px}
+#sheet h3{margin:18px 0 6px;font-size:15px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+#sheet .row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #8883;font-size:15px}
+#sheet .row span:last-child{color:var(--muted);text-align:right}
+#sheet button{border:0;border-radius:12px;padding:12px 16px;font:600 16px var(--font);background:var(--forest);color:#fff;margin:6px 6px 0 0}
+#sheet button.ghost{background:#8883;color:var(--fg)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:14px}
+.legend i{display:inline-block;width:22px;height:5px;border-radius:3px;vertical-align:middle;margin-right:6px}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 116px);z-index:1500;
+  background:#111d;color:#fff;padding:12px 18px;border-radius:14px;font-size:17px;max-width:90%;text-align:center}
+.me{width:26px;height:26px}
+.poi{font-size:22px;line-height:1;text-shadow:0 0 3px #fff,0 0 3px #fff}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="status"><span class="dot"></span><span id="statusText">Tryk på “Hvor er jeg”</span><span id="speed"></span></div>
+
+<div id="side">
+  <button id="bRec" title="Optag turen" aria-label="Optag turen">●</button>
+  <button id="bMore" title="Mere" aria-label="Mere">☰</button>
+</div>
+
+<div id="bar">
+  <button id="bWhere">Hvor er jeg<small>find mig</small></button>
+  <button id="bLead">Hvor fører stien?<small>læses højt</small></button>
+  <button id="bMark">Husk her<small>tal en note</small></button>
+</div>
+
+<div id="toast" hidden></div>
+<div id="sheet" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ---------- storage helpers ---------- */
+const store={
+  get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},
+  set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){toast("Telefonens lager er fuldt");return false}}
+};
+
+/* ---------- map ---------- */
+const map=L.map("map",{zoomControl:false,attributionControl:true}).setView([55.93,12.35],13);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,
+  attribution:"© OpenStreetMap-bidragydere"}).addTo(map);
+
+const STYLE={
+  bridleway:{color:"#c2531b",weight:6,label:"Ridesti"},
+  track:{color:"#7a5a2b",weight:5,label:"Skovvej"},
+  path:{color:"#3a3a3a",weight:3,dashArray:"6 5",label:"Lille sti"},
+  footway:{color:"#3a3a3a",weight:3,dashArray:"2 5",label:"Gangsti"},
+  cycleway:{color:"#2b6fb5",weight:4,label:"Cykelsti"},
+  mtb:{color:"#2b6fb5",weight:3,dashArray:"8 4",label:"MTB-spor"},
+  road:{color:"#888",weight:6,label:"Vej"}
+};
+const pathLayer=L.layerGroup().addTo(map);
+const poiLayer=L.layerGroup().addTo(map);
+const rideLayer=L.layerGroup().addTo(map);
+const markLayer=L.layerGroup().addTo(map);
+
+/* ---------- OSM data (Overpass) ---------- */
+const OVERPASS="https://overpass-api.de/api/interpreter";
+let graph={nodes:new Map(),ways:new Map(),adj:new Map()};
+let loadedBoxes=store.get("rk_boxes",[]);   // cached areas
+let loading=false;
+
+function classify(t){
+  if(t.highway==="bridleway"||t.horse==="designated")return"bridleway";
+  if(t.mtb==="yes"||t["mtb:scale"])return t.highway==="track"?"track":"mtb";
+  if(t.highway==="track")return"track";
+  if(t.highway==="footway"||t.highway==="steps")return"footway";
+  if(t.highway==="cycleway")return"cycleway";
+  if(t.highway==="path")return"path";
+  return"road";
+}
+function poiIcon(t){
+  if(t.historic==="ruins"||t.ruins==="yes")return"🏚";
+  if(t.historic==="archaeological_site"||t.historic==="tomb")return"⛰";
+  if(t.historic==="memorial"||t.historic==="monument"||t.historic==="stone")return"🗿";
+  if(t.natural==="tree")return"🌳";
+  if(t.natural==="stone")return"🪨";
+  if(t.tourism==="viewpoint")return"👁";
+  if(t.amenity==="shelter")return"⛺";
+  if(t.natural==="spring")return"💧";
+  if(t.historic)return"🏛";
+  return"📍";
+}
+function boxKey(b){return b.map(v=>v.toFixed(2)).join(",")}
+function covered(b){return loadedBoxes.some(c=>c[0]<=b[0]&&c[1]<=b[1]&&c[2]>=b[2]&&c[3]>=b[3])}
+
+async function loadArea(force){
+  if(loading||map.getZoom()<12)return;
+  const B=map.getBounds().pad(0.6);
+  const b=[B.getSouth(),B.getWest(),B.getNorth(),B.getEast()].map(v=>+v.toFixed(3));
+  const key="rk_area_"+boxKey(b);
+  const cached=!force&&findCachedArea(b);
+  if(cached){ingest(cached);return}
+  loading=true;status("Henter stier…");
+  const bb=b.join(",");
+  const q=`[out:json][timeout:40];(
+    way["highway"~"^(path|track|bridleway|footway|cycleway|steps|unclassified|service|residential|tertiary|secondary)$"](${bb});
+    node["historic"](${bb});way["historic"](${bb});
+    node["natural"="tree"]["name"](${bb});node["natural"="tree"]["denotation"="natural_monument"](${bb});
+    node["natural"~"^(stone|spring)$"](${bb});node["tourism"="viewpoint"](${bb});node["amenity"="shelter"](${bb});
+  );out body;>;out skel qt;`;
+  try{
+    const r=await fetch(OVERPASS,{method:"POST",body:"data="+encodeURIComponent(q)});
+    if(!r.ok)throw new Error(r.status);
+    const data=await r.json();
+    const slim=slimData(data);
+    saveArea(key,b,slim);
+    ingest(slim);
+    status("Stier hentet");
+  }catch(e){status("Kunne ikke hente stier. Prøv igen med net.")}
+  loading=false;
+}
+function slimData(d){
+  const n={},w=[],p=[];
+  for(const e of d.elements){
+    if(e.type==="node"){n[e.id]=[+e.lat.toFixed(6),+e.lon.toFixed(6)];if(e.tags&&Object.keys(e.tags).length)p.push({id:e.id,ll:n[e.id],t:pickTags(e.tags)})}
+  }
+  for(const e of d.elements){
+    if(e.type!=="way"||!e.tags)continue;
+    if(e.tags.highway)w.push({id:e.id,n:e.nodes,t:pickTags(e.tags)});
+    else if(e.tags.historic&&e.nodes&&n[e.nodes[0]])p.push({id:e.id,ll:n[e.nodes[0]],t:pickTags(e.tags)});
+  }
+  return{n,w,p};
+}
+function pickTags(t){const k=["highway","name","horse","mtb","mtb:scale","surface","access","historic","ruins","natural","tourism","amenity","denotation","description","species","trail_visibility"];const o={};for(const x of k)if(t[x])o[x]=t[x];return o}
+function saveArea(key,b,slim){
+  // keep at most 12 areas
+  loadedBoxes=loadedBoxes.filter(x=>x.key!==key);
+  loadedBoxes.push({key,b});
+  while(loadedBoxes.length>12){const old=loadedBoxes.shift();try{localStorage.removeItem(old.key)}catch(e){}}
+  store.set(key,slim);store.set("rk_boxes",loadedBoxes);
+}
+function findCachedArea(b){
+  for(const c of loadedBoxes){const x=c.b;if(x[0]<=b[0]&&x[1]<=b[1]&&x[2]>=b[2]&&x[3]>=b[3]){const s=store.get(c.key,null);if(s)return s}}
+  return null;
+}
+const drawnWays=new Set(),drawnPois=new Set();
+function ingest(s){
+  for(const id in s.n)graph.nodes.set(+id,s.n[id]);
+  for(const w of s.w){
+    if(graph.ways.has(w.id))continue;
+    w.cls=classify(w.t);graph.ways.set(w.id,w);
+    for(let i=0;i<w.n.length;i++){
+      const a=w.n[i];if(!graph.adj.has(a))graph.adj.set(a,[]);
+      graph.adj.get(a).push({way:w.id,idx:i});
+    }
+    if(!drawnWays.has(w.id)){
+      drawnWays.add(w.id);
+      const ll=w.n.map(x=>graph.nodes.get(x)).filter(Boolean);
+      const st=STYLE[w.cls];
+      L.polyline(ll,{color:st.color,weight:st.weight,dashArray:st.dashArray,opacity:.9})
+        .bindPopup(()=>wayLabel(w)).addTo(pathLayer);
+    }
+  }
+  for(const p of s.p){
+    if(drawnPois.has(p.id))continue;drawnPois.add(p.id);
+    const name=p.t.name||poiName(p.t);
+    L.marker(p.ll,{icon:L.divIcon({className:"poi",html:poiIcon(p.t),iconSize:[24,24]})})
+      .bindPopup(`<b>${esc(name)}</b>${p.t.description?"<br>"+esc(p.t.description):""}`).addTo(poiLayer);
+  }
+}
+function poiName(t){
+  if(t.historic==="ruins"||t.ruins)return"Ruin";
+  if(t.historic==="archaeological_site")return"Fortidsminde";
+  if(t.historic==="tomb")return"Gravhøj";
+  if(t.historic)return"Mindesmærke";
+  if(t.natural==="tree")return"Særligt træ";
+  if(t.natural==="stone")return"Stor sten";
+  if(t.natural==="spring")return"Kilde";
+  if(t.tourism==="viewpoint")return"Udsigtspunkt";
+  if(t.amenity==="shelter")return"Shelter";
+  return"Sted";
+}
+function wayLabel(w){
+  const st=STYLE[w.cls];let s=`<b>${esc(w.t.name||st.label)}</b>`;
+  if(w.t.horse==="no")s+="<br>Ridning ikke tilladt";
+  if(w.t.horse==="yes"||w.t.horse==="designated")s+="<br>Ridning tilladt";
+  if(w.t.surface)s+="<br>Underlag: "+esc(w.t.surface);
+  return s;
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+
+let moveTimer;
+map.on("moveend",()=>{clearTimeout(moveTimer);moveTimer=setTimeout(()=>loadArea(false),600)});
+
+/* ---------- geometry ---------- */
+const R=6371000,rad=Math.PI/180;
+function dist(a,b){const dLat=(b[0]-a[0])*rad,dLon=(b[1]-a[1])*rad;const x=Math.sin(dLat/2)**2+Math.cos(a[0]*rad)*Math.cos(b[0]*rad)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
+function bearing(a,b){const y=Math.sin((b[1]-a[1])*rad)*Math.cos(b[0]*rad);const x=Math.cos(a[0]*rad)*Math.sin(b[0]*rad)-Math.sin(a[0]*rad)*Math.cos(b[0]*rad)*Math.cos((b[1]-a[1])*rad);return(Math.atan2(y,x)/rad+360)%360}
+function compass(b){return["nord","nordøst","øst","sydøst","syd","sydvest","vest","nordvest"][Math.round(b/45)%8]}
+function angDiff(a,b){let d=Math.abs(a-b)%360;return d>180?360-d:d}
+function meters(m){return m<1000?Math.round(m/10)*10+" meter":(m/1000).toFixed(1).replace(".",",")+" kilometer"}
+
+/* ---------- position ---------- */
+let me=null,meMarker=null,heading=null,watchId=null,follow=true,lastFix=null;
+const meIcon=L.divIcon({className:"me",iconSize:[26,26],html:`<svg viewBox="0 0 26 26" width="26" height="26"><circle cx="13" cy="13" r="9" fill="#1e6fe0" stroke="#fff" stroke-width="3"/><path id="hd" d="M13 1 L17 8 L9 8 Z" fill="#1e6fe0"/></svg>`});
+function startGPS(){
+  if(watchId!==null)return;
+  if(!navigator.geolocation){status("Telefonen giver ikke adgang til GPS");return}
+  status("Finder din position…");
+  watchId=navigator.geolocation.watchPosition(onFix,err=>{
+    status(err.code===1?"Tillad placering for siden i Indstillinger":"GPS-signalet er svagt");
+  },{enableHighAccuracy:true,maximumAge:1000,timeout:20000});
+}
+function onFix(p){
+  const ll=[p.coords.latitude,p.coords.longitude];
+  let spd=p.coords.speed; // m/s or null
+  if(lastFix){
+    const d=dist(lastFix.ll,ll),dt=(p.timestamp-lastFix.t)/1000;
+    if(d>4){heading=bearing(lastFix.ll,ll)}
+    if((spd===null||spd<0)&&dt>0)spd=d/dt;
+  }
+  if(p.coords.heading!=null&&!isNaN(p.coords.heading)&&(p.coords.speed||0)>1)heading=p.coords.heading;
+  lastFix={ll,t:p.timestamp};me=ll;
+  if(!meMarker){meMarker=L.marker(ll,{icon:meIcon,zIndexOffset:1000}).addTo(map);map.setView(ll,16)}
+  else meMarker.setLatLng(ll);
+  const hd=meMarker.getElement()&&meMarker.getElement().querySelector("svg");
+  if(hd)hd.style.transform=heading!=null?`rotate(${heading}deg)`:"";
+  if(follow)map.panTo(ll,{animate:true});
+  const kmh=(spd||0)*3.6;
+  document.getElementById("speed").textContent=kmh>1?Math.round(kmh)+" km/t":"";
+  if(recording)addPoint(ll,p.timestamp,kmh,p.coords.accuracy);
+  const near=nearestWay(ll);
+  if(!recording||Date.now()-lastStatus>8000)status(near&&near.d<30?onWayText(near):"Ingen kendt sti lige her");
+}
+let lastStatus=0;
+function status(t){document.getElementById("statusText").textContent=t;lastStatus=Date.now()}
+map.on("dragstart",()=>{follow=false});
+
+/* nearest way segment */
+function nearestWay(ll){
+  let best=null;
+  for(const w of graph.ways.values()){
+    for(let i=0;i<w.n.length-1;i++){
+      const a=graph.nodes.get(w.n[i]),b=graph.nodes.get(w.n[i+1]);if(!a||!b)continue;
+      const d=segDist(ll,a,b);
+      if(!best||d.d<best.d)best={d:d.d,way:w,i,t:d.t};
+    }
+  }
+  return best;
+}
+function segDist(p,a,b){
+  const k=Math.cos(p[0]*rad);
+  const ax=a[1]*k,ay=a[0],bx=b[1]*k,by=b[0],px=p[1]*k,py=p[0];
+  const dx=bx-ax,dy=by-ay;let t=((px-ax)*dx+(py-ay)*dy)/((dx*dx+dy*dy)||1e-12);t=Math.max(0,Math.min(1,t));
+  const q=[ay+t*dy,(ax+t*dx)/k];return{d:dist(p,q),t};
+}
+function onWayText(n){const st=STYLE[n.way.cls];return(n.way.t.name?n.way.t.name+" · ":"")+st.label}
+
+/* ---------- "Hvor fører stien hen?" ---------- */
+function leadsTo(){
+  if(!me){startGPS();say("Jeg leder stadig efter din position.");return}
+  const n=nearestWay(me);
+  if(!n||n.d>40){say("Jeg kan ikke se en kendt sti her. Den nærmeste sti er "+(n?meters(n.d)+" mod "+compass(bearing(me,graph.nodes.get(n.way.n[n.i]))):"ukendt")+".");return}
+  const w=n.way;
+  // choose direction along the way: matches heading if known
+  const a=graph.nodes.get(w.n[n.i]),b=graph.nodes.get(w.n[n.i+1]);
+  let forward=true;
+  if(heading!=null)forward=angDiff(bearing(a,b),heading)<=90;
+  const res=follow1(w,forward?n.i+1:n.i,forward?1:-1);
+  const dir=compass(bearing(me,res.end));
+  let s=`Du er på ${w.t.name?w.t.name+", en ":"en "}${STYLE[w.cls].label.toLowerCase()}. `;
+  s+=`Fremad fortsætter den ${meters(res.len)} mod ${dir}`;
+  if(res.meets.length){
+    const m=res.meets[0];
+    s+=` og møder ${m.name?m.name+", en ":"en "}${STYLE[m.cls].label.toLowerCase()}`;
+    if(res.meets.length>1)s+=`. Der deler stien sig i ${res.meets.length+1} retninger`;
+  }else if(res.dead)s+=" og ender blindt";
+  s+=".";
+  if(heading==null)s+=" Jeg kender ikke din retning endnu, så jeg har gættet. Ri lidt, og spørg igen.";
+  const poi=nearbyPoi(me,400);
+  if(poi)s+=` I nærheden: ${poi.name}, ${meters(poi.d)} mod ${compass(poi.b)}.`;
+  say(s);
+  showLead(res.coords);
+}
+function follow1(w,startIdx,step){
+  // walk along the way, and continue through simple joints (only one other way) until a real junction
+  let coords=[me],len=0,prev=me,cur=w,idx=startIdx,meets=[],dead=false,guard=0,seen=new Set([w.id]);
+  while(guard++<4000){
+    const nid=cur.n[idx];const ll=graph.nodes.get(nid);if(!ll)break;
+    len+=dist(prev,ll);prev=ll;coords.push(ll);
+    const others=(graph.adj.get(nid)||[]).filter(x=>x.way!==cur.id);
+    const atEnd=(idx===0||idx===cur.n.length-1);
+    if(others.length){
+      const ows=others.map(o=>graph.ways.get(o.way));
+      const sameish=ows.filter(o=>o.cls===cur.cls&&(o.t.name||"")===(cur.t.name||"")&&!seen.has(o.id));
+      if(atEnd&&others.length===1&&sameish.length===1){ // continuation of the same path
+        const o=others[0];cur=graph.ways.get(o.way);seen.add(cur.id);
+        step=o.idx===0?1:-1;idx=o.idx+step;continue;
+      }
+      if(len>15){
+        const uniq=new Map();for(const o of ows)if(!uniq.has(o.id))uniq.set(o.id,{name:o.t.name,cls:o.cls});
+        meets=[...uniq.values()];break;
+      }
+    }
+    if(atEnd&&!others.length){dead=true;break}
+    idx+=step;if(idx<0||idx>=cur.n.length)break;
+  }
+  return{len,end:prev,coords,meets,dead};
+}
+let leadLine=null;
+function showLead(c){
+  if(leadLine)map.removeLayer(leadLine);
+  leadLine=L.polyline(c,{color:"#ffd400",weight:10,opacity:.85}).addTo(map);
+  setTimeout(()=>{if(leadLine){map.removeLayer(leadLine);leadLine=null}},30000);
+}
+function nearbyPoi(ll,max){
+  let best=null;
+  poiLayer.eachLayer(m=>{const p=m.getLatLng(),d=dist(ll,[p.lat,p.lng]);if(d<max&&(!best||d<best.d)){const div=document.createElement("div");div.innerHTML=m.getPopup().getContent();best={d,b:bearing(ll,[p.lat,p.lng]),name:div.querySelector("b").textContent}}});
+  return best;
+}
+
+/* ---------- speech ---------- */
+function say(t){
+  status(t.length>70?t.slice(0,68)+"…":t);toast(t,9000);
+  try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang="da-DK";u.rate=1.0;
+    const v=speechSynthesis.getVoices().find(v=>v.lang&&v.lang.startsWith("da"));if(v)u.voice=v;speechSynthesis.speak(u)}catch(e){}
+}
+let toastTimer;
+function toast(t,ms){const el=document.getElementById("toast");el.textContent=t;el.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.hidden=true,ms||3000)}
+
+/* ---------- recording + gait ---------- */
+let recording=false,ride=null,wakeLock=null;
+const GAIT={walk:8,trot:17}; // km/h thresholds, tunable
+function gaitOf(k){return k<GAIT.walk?"walk":k<GAIT.trot?"trot":"gallop"}
+const GCOL={walk:"#4b8b3b",trot:"#e9a21b",gallop:"#d6261e"};
+async function toggleRec(){
+  if(!recording){
+    startGPS();
+    ride={id:Date.now(),start:Date.now(),pts:[]};recording=true;
+    document.getElementById("status").classList.add("rec");document.getElementById("bRec").classList.add("on");
+    try{wakeLock=await navigator.wakeLock.request("screen")}catch(e){}
+    say("Optagelse startet.");
+  }else{
+    recording=false;document.getElementById("status").classList.remove("rec");document.getElementById("bRec").classList.remove("on");
+    try{wakeLock&&wakeLock.release()}catch(e){}
+    finishRide();
+  }
+}
+let lastPt=null,lastSeg=null;
+function addPoint(ll,t,kmh,acc){
+  if(acc>40)return;
+  // smooth speed over last points
+  ride.pts.push([+ll[0].toFixed(6),+ll[1].toFixed(6),Math.round(t/1000),Math.round(kmh*10)/10]);
+  if(lastPt){
+    const g=gaitOf(smoothSpeed());
+    L.polyline([lastPt,ll],{color:GCOL[g],weight:7,opacity:.9}).addTo(rideLayer);
+  }
+  lastPt=ll;
+  if(ride.pts.length%15===0)store.set("rk_current",ride);
+}
+function smoothSpeed(){const p=ride.pts.slice(-4);return p.reduce((s,x)=>s+x[3],0)/p.length}
+function gallopSegments(pts){
+  // contiguous runs of smoothed speed above trot threshold lasting >= 25 s
+  const segs=[];let run=null;
+  for(let i=0;i<pts.length;i++){
+    const w=pts.slice(Math.max(0,i-2),i+3),v=w.reduce((s,x)=>s+x[3],0)/w.length;
+    if(v>=GAIT.trot){if(!run)run={a:i};run.b=i}
+    else if(run){if(pts[run.b][2]-pts[run.a][2]>=25)segs.push(run);run=null}
+  }
+  if(run&&pts[run.b][2]-pts[run.a][2]>=25)segs.push(run);
+  return segs.map(s=>{let len=0;for(let i=s.a+1;i<=s.b;i++)len+=dist(pts[i-1],pts[i]);return{a:s.a,b:s.b,len,secs:pts[s.b][2]-pts[s.a][2]}});
+}
+function finishRide(){
+  if(!ride||ride.pts.length<5){say("Turen var for kort til at gemme.");ride=null;return}
+  ride.end=Date.now();
+  let len=0;for(let i=1;i<ride.pts.length;i++)len+=dist(ride.pts[i-1],ride.pts[i]);
+  ride.len=len;ride.gallops=gallopSegments(ride.pts);
+  const rides=store.get("rk_rides",[]);rides.push(ride);store.set("rk_rides",rides);
+  try{localStorage.removeItem("rk_current")}catch(e){}
+  say(`Turen er gemt. ${meters(len)}`+(ride.gallops.length?`, med ${ride.gallops.length} galopstrækning${ride.gallops.length>1?"er":""}.`:"."));
+  ride=null;lastPt=null;drawSaved();
+}
+
+/* ---------- "Husk her" ---------- */
+function markHere(){
+  if(!me){startGPS();say("Jeg skal lige finde din position først.");return}
+  const mark={id:Date.now(),ll:me,t:Date.now(),text:""};
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const save=()=>{const ms=store.get("rk_marks",[]);ms.push(mark);store.set("rk_marks",ms);drawSaved()};
+  if(!SR){mark.text="Gemt sted";save();say("Stedet er gemt.");return}
+  const r=new SR();r.lang="da-DK";r.interimResults=false;r.maxAlternatives=1;
+  let got=false;
+  toast("Tal nu … fx “god galop herfra op til bakken”",8000);status("Lytter…");
+  const fallback=()=>{if(got)return;got=true;mark.text="Gemt sted";save();say("Jeg hørte ikke noget, men stedet er gemt.")};
+  r.onresult=e=>{if(got)return;got=true;mark.text=e.results[0][0].transcript;save();say("Gemt: "+mark.text)};
+  r.onerror=fallback;
+  r.onend=fallback;
+  try{r.start()}catch(e){mark.text="Gemt sted";save();say("Stedet er gemt.")}
+}
+
+/* ---------- saved layers ---------- */
+function drawSaved(){
+  markLayer.clearLayers();
+  for(const m of store.get("rk_marks",[]))
+    L.marker(m.ll,{icon:L.divIcon({className:"poi",html:"⭐",iconSize:[24,24]})})
+      .bindPopup(`<b>${esc(m.text||"Gemt sted")}</b><br>${new Date(m.t).toLocaleDateString("da-DK")}`).addTo(markLayer);
+  for(const r of store.get("rk_rides",[]))
+    for(const g of r.gallops||[]){
+      const seg=r.pts.slice(g.a,g.b+1).map(p=>[p[0],p[1]]);
+      L.polyline(seg,{color:"#d6261e",weight:8,opacity:.75})
+        .bindPopup(`<b>Galopstrækning</b><br>${meters(g.len)}, ${g.secs} sekunder<br>${new Date(r.start).toLocaleDateString("da-DK")}`).addTo(markLayer);
+    }
+}
+
+/* ---------- "Mere" sheet (after the ride) ---------- */
+function openSheet(){
+  const sh=document.getElementById("sheet");
+  const rides=store.get("rk_rides",[]).slice().reverse(),marks=store.get("rk_marks",[]).slice().reverse();
+  let h=`<h2>Ridekort</h2>
+  <div class="legend">${["bridleway","track","path","mtb","cycleway"].map(k=>`<span><i style="background:${STYLE[k].color}"></i>${STYLE[k].label}</span>`).join("")}
+  <span><i style="background:#d6261e"></i>Galop</span><span><i style="background:#e9a21b"></i>Trav</span><span><i style="background:#4b8b3b"></i>Skridt</span></div>
+  <h3>Gemte steder</h3>`;
+  h+=marks.length?marks.map(m=>`<div class="row" data-ll="${m.ll}"><span>⭐ ${esc(m.text||"Gemt sted")}</span><span>${new Date(m.t).toLocaleDateString("da-DK")}</span></div>`).join(""):`<p>Ingen endnu. Tryk “Husk her” på turen.</p>`;
+  h+=`<h3>Ture</h3>`;
+  h+=rides.length?rides.map(r=>`<div class="row" data-ll="${r.pts[0][0]},${r.pts[0][1]}"><span>${new Date(r.start).toLocaleDateString("da-DK",{weekday:"short",day:"numeric",month:"short"})} · ${meters(r.len)}</span><span>${(r.gallops||[]).length} galop</span></div>`).join(""):`<p>Ingen endnu. Tryk ● for at optage.</p>`;
+  h+=`<h3>Galopgrænse</h3><p>Galop tæller fra <b id="gv">${GAIT.trot}</b> km/t.</p>
+  <button class="ghost" id="gMinus">− 1</button><button class="ghost" id="gPlus">+ 1</button>
+  <h3>Kort</h3><button id="reload">Hent stier igen her</button>
+  <button class="ghost" id="close">Luk</button>`;
+  sh.innerHTML=h;sh.hidden=false;
+  sh.querySelectorAll(".row[data-ll]").forEach(el=>el.onclick=()=>{const p=el.dataset.ll.split(",").map(Number);follow=false;map.setView(p,16);sh.hidden=true});
+  sh.querySelector("#close").onclick=()=>sh.hidden=true;
+  sh.querySelector("#reload").onclick=()=>{sh.hidden=true;loadArea(true)};
+  const setG=v=>{GAIT.trot=Math.max(10,Math.min(35,v));store.set("rk_gait",GAIT.trot);sh.querySelector("#gv").textContent=GAIT.trot};
+  sh.querySelector("#gMinus").onclick=()=>setG(GAIT.trot-1);
+  sh.querySelector("#gPlus").onclick=()=>setG(GAIT.trot+1);
+}
+
+/* ---------- wire up ---------- */
+GAIT.trot=store.get("rk_gait",GAIT.trot);
+document.getElementById("bWhere").onclick=()=>{follow=true;startGPS();if(me){map.setView(me,17);const n=nearestWay(me);say(n&&n.d<30?"Du er på "+onWayText(n).toLowerCase()+".":"Du er ikke på en kendt sti. Den nærmeste er "+(n?meters(n.d):"langt væk")+" væk.")}};
+document.getElementById("bLead").onclick=leadsTo;
+document.getElementById("bMark").onclick=markHere;
+document.getElementById("bRec").onclick=toggleRec;
+document.getElementById("bMore").onclick=openSheet;
+document.addEventListener("visibilitychange",async()=>{if(recording&&document.visibilityState==="visible"){try{wakeLock=await navigator.wakeLock.request("screen")}catch(e){}}});
+// restore an unfinished ride after a reload
+const cur=store.get("rk_current",null);if(cur&&cur.pts&&cur.pts.length>5){ride=cur;recording=true;document.getElementById("status").classList.add("rec");document.getElementById("bRec").classList.add("on");startGPS()}
+for(const c of loadedBoxes){const s=store.get(c.key,null);if(s)ingest(s)}
+drawSaved();loadArea(false);
+if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>

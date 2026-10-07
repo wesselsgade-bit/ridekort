@@ -1,0 +1,10 @@
+{
+  "name": "Ridekort",
+  "short_name": "Ridekort",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1f2a22",
+  "theme_color": "#1f2a22",
+  "lang": "da"
+}
