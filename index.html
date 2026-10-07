@@ -56,7 +56,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:
 #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 116px);z-index:1500;
   background:#111d;color:#fff;padding:12px 18px;border-radius:14px;font-size:17px;max-width:90%;text-align:center}
 .me{width:26px;height:26px}
-.poi{font-size:22px;line-height:1;text-shadow:0 0 3px #fff,0 0 3px #fff}
+.poi{font-size:16px;line-height:1;text-shadow:0 0 3px #fff,0 0 3px #fff}
 </style>
 </head>
 <body>
@@ -110,8 +110,8 @@ const markLayer=L.layerGroup().addTo(map);
 const OVERPASS="https://overpass-api.de/api/interpreter";
 let graph={nodes:new Map(),ways:new Map(),adj:new Map()};
 // v2 cache: drop old areas that still contained roads
-try{for(const c of store.get("rk_boxes",[]))localStorage.removeItem(c.key);localStorage.removeItem("rk_boxes")}catch(e){}
-let loadedBoxes=store.get("rk2_boxes",[]);   // cached areas
+try{for(const k of ["rk_boxes","rk2_boxes"]){for(const c of store.get(k,[]))localStorage.removeItem(c.key);localStorage.removeItem(k)}}catch(e){}
+let loadedBoxes=store.get("rk3_boxes",[]);   // cached areas
 let loading=false;
 
 function classify(t){
@@ -139,10 +139,10 @@ function boxKey(b){return b.map(v=>v.toFixed(2)).join(",")}
 function covered(b){return loadedBoxes.some(c=>c[0]<=b[0]&&c[1]<=b[1]&&c[2]>=b[2]&&c[3]>=b[3])}
 
 async function loadArea(force){
-  if(loading||map.getZoom()<12)return;
-  const B=map.getBounds().pad(0.6);
+  if(loading)return;if(map.getZoom()<14){status("Zoom ind for at se stierne");return}
+  const B=map.getBounds().pad(0.3);
   const b=[B.getSouth(),B.getWest(),B.getNorth(),B.getEast()].map(v=>+v.toFixed(3));
-  const key="rk2_area_"+boxKey(b);
+  const key="rk3_area_"+boxKey(b);
   const cached=!force&&findCachedArea(b);
   if(cached){ingest(cached);return}
   loading=true;status("Henter stier…");
@@ -155,9 +155,9 @@ async function loadArea(force){
   (
     way["highway"~"^(track|bridleway|path)$"]["footway"!~"sidewalk|crossing"](${bb});
     way["highway"~"^(footway|cycleway)$"]["footway"!~"sidewalk|crossing"](area.ga);
-    node["historic"](${bb});way["historic"](${bb});
+    node["historic"~"^(ruins|archaeological_site|tomb|castle)$"](${bb});way["historic"~"^(ruins|archaeological_site|castle)$"](${bb});
     node["natural"="tree"]["name"](${bb});node["natural"="tree"]["denotation"="natural_monument"](${bb});
-    node["natural"~"^(stone|spring)$"](${bb});node["tourism"="viewpoint"](${bb});node["amenity"="shelter"](${bb});
+    node["tourism"="viewpoint"](${bb});node["amenity"="shelter"](${bb});
   );out body;>;out skel qt;`;
   try{
     const r=await fetch(OVERPASS,{method:"POST",body:"data="+encodeURIComponent(q)});
@@ -188,7 +188,7 @@ function saveArea(key,b,slim){
   loadedBoxes=loadedBoxes.filter(x=>x.key!==key);
   loadedBoxes.push({key,b});
   while(loadedBoxes.length>12){const old=loadedBoxes.shift();try{localStorage.removeItem(old.key)}catch(e){}}
-  store.set(key,slim);store.set("rk2_boxes",loadedBoxes);
+  store.set(key,slim);store.set("rk3_boxes",loadedBoxes);
 }
 function findCachedArea(b){
   for(const c of loadedBoxes){const x=c.b;if(x[0]<=b[0]&&x[1]<=b[1]&&x[2]>=b[2]&&x[3]>=b[3]){const s=store.get(c.key,null);if(s)return s}}
@@ -216,7 +216,7 @@ function ingest(s){
   for(const p of s.p){
     if(drawnPois.has(p.id))continue;drawnPois.add(p.id);
     const name=p.t.name||poiName(p.t);
-    L.marker(p.ll,{icon:L.divIcon({className:"poi",html:poiIcon(p.t),iconSize:[24,24]})})
+    L.marker(p.ll,{icon:L.divIcon({className:"poi",html:poiIcon(p.t),iconSize:[18,18]})})
       .bindPopup(`<b>${esc(name)}</b>${p.t.description?"<br>"+esc(p.t.description):""}`).addTo(poiLayer);
   }
 }
@@ -241,6 +241,12 @@ function wayLabel(w){
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 
+function zoomLayers(){
+  const z=map.getZoom();
+  if(z>=13)pathLayer.addTo(map);else map.removeLayer(pathLayer);
+  if(z>=15)poiLayer.addTo(map);else map.removeLayer(poiLayer);
+}
+map.on("zoomend",zoomLayers);
 let moveTimer;
 map.on("moveend",()=>{clearTimeout(moveTimer);moveTimer=setTimeout(()=>loadArea(false),600)});
 
@@ -500,9 +506,8 @@ document.getElementById("bMore").onclick=openSheet;
 document.addEventListener("visibilitychange",async()=>{if(recording&&document.visibilityState==="visible"){try{wakeLock=await navigator.wakeLock.request("screen")}catch(e){}}});
 // restore an unfinished ride after a reload
 const cur=store.get("rk_current",null);if(cur&&cur.pts&&cur.pts.length>5){ride=cur;recording=true;document.getElementById("status").classList.add("rec");document.getElementById("bRec").classList.add("on");startGPS()}
-for(const c of loadedBoxes){const s=store.get(c.key,null);if(s)ingest(s)}
-drawSaved();loadArea(false);
-if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+drawSaved();zoomLayers();loadArea(false);
+if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").then(r=>r.update()).catch(()=>{});
 </script>
 </body>
 </html>
